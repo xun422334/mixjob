@@ -1,0 +1,24 @@
+# 敏感配置
+.env
+*.db
+
+# 依赖
+node_modules/
+__pycache__/
+*.pyc
+
+# 构建产物
+dist/
+build/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# Claude 本地配置
+.claude/
+
+# 简历等个人文件
+*.pdf
+*.jpg
+*.png

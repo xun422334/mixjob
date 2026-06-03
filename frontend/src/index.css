@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #42A5F5;
+  --color-primary-dark: #1E88E5;
+  --color-primary-light: #BBDEFB;
+  --color-primary-bg: #E3F2FD;
+  --color-page-bg: #F5F9FF;
+}
+
+body {
+  margin: 0;
+  background-color: #F5F9FF;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: #333333;
+}
+
+#root {
+  min-height: 100vh;
+}
