@@ -22,7 +22,6 @@ export default function ScrapeBar({ selectedCity, keyword, onKeywordChange, onSc
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ScrapeResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [suggestedKeywords, setSuggestedKeywords] = useState('')
   const [showSuggest, setShowSuggest] = useState(false)
 
   // Auto-fill keywords when a resume is uploaded
@@ -32,7 +31,6 @@ export default function ScrapeBar({ selectedCity, keyword, onKeywordChange, onSc
       .then((data) => {
         if (data.keywords) {
           onKeywordChange(data.keywords)
-          setSuggestedKeywords(data.keywords)
         }
       })
       .catch(() => {})
@@ -62,13 +60,12 @@ export default function ScrapeBar({ selectedCity, keyword, onKeywordChange, onSc
   const handleSmartSuggest = async () => {
     try {
       // Try resume keywords first, fall back to chat keywords
-      let data = await fetchResumeKeywords()
+      let data: { keywords: string } | null = await fetchResumeKeywords()
       if (!data.keywords) {
         data = await fetchChatKeywords()
       }
       if (data.keywords) {
-        setKeyword(data.keywords)
-        setSuggestedKeywords(data.keywords)
+        onKeywordChange(data.keywords)
         setShowSuggest(false)
       }
     } catch {
