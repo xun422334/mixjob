@@ -6,7 +6,7 @@ from .models.database import init_db
 
 app = FastAPI(title="AI智能求职助手")
 
-origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,https://www.mixjob.cn,https://mixjob.cn").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
