@@ -84,6 +84,7 @@ async def list_jobs(
 
 @router.post("/scrape")
 async def scrape_jobs_api(req: ScrapeRequest, db: Session = Depends(get_db)):
+    import traceback
     from ..services.job_scraper import scrape_jobs as run_scrape
 
     keywords = [k.strip() for k in req.keyword.split('/') if k.strip()]
@@ -92,12 +93,15 @@ async def scrape_jobs_api(req: ScrapeRequest, db: Session = Depends(get_db)):
 
     all_results = []
     for kw in keywords:
-        result = await run_scrape(
-            city=req.city,
-            keyword=kw,
-            sources=req.sources,
-            db=db,
-        )
+        try:
+            result = await run_scrape(
+                city=req.city,
+                keyword=kw,
+                sources=req.sources,
+                db=db,
+            )
+        except Exception as e:
+            return {"error": str(e), "traceback": traceback.format_exc()}
         all_results.append(result)
 
     # Merge results from multiple keywords
