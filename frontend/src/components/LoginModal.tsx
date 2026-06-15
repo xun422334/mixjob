@@ -1,6 +1,11 @@
-interface LoginModalProps {
-  show: boolean
-  onClose: () => void
+import { useState, useEffect, useRef } from 'react'
+import { getLoginStatus, getLoginStatusBySource } from '../api'
+
+interface LoginStatus {
+  source: string
+  logged_in: boolean
+  message: string
+  hours_ago?: number
 }
 
 const LOGIN_URLS: Record<string, { label: string; url: string }> = {
@@ -22,15 +27,87 @@ const LOGIN_URLS: Record<string, { label: string; url: string }> = {
   },
 }
 
-export default function LoginModal({ show, onClose }: LoginModalProps) {
-  if (!show) return null
+const ALL_SOURCES = ['boss', 'liepin', 'zhaopin', 'guopin']
 
-  const handleLogin = (source: string) => {
+interface LoginModalProps {
+  show: boolean
+  onClose: () => void
+}
+
+export default function LoginModal({ show, onClose }: LoginModalProps) {
+  const [statuses, setStatuses] = useState<Record<string, LoginStatus>>({})
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState('')
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const fetchStatus = async () => {
+    setLoading(true)
+    try {
+      const data = await getLoginStatus()
+      setStatuses(data.sources || {})
+    } catch {
+      setMessage('获取登录状态失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (show) {
+      fetchStatus()
+    } else {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [show])
+
+  const handleLogin = async (source: string) => {
+    setMessage('')
+    // Open login page in new tab for user
     const entry = LOGIN_URLS[source]
     if (entry) {
       window.open(entry.url, '_blank')
     }
+
+    // Also try backend Playwright auto-login (works in local dev)
+    try {
+      const resp = await fetch(`/api/auth/login/${source}`, { method: 'POST' })
+      if (resp.ok) {
+        const data = await resp.json()
+        setMessage(data.message)
+      }
+    } catch {
+      // Backend not available, just rely on new tab
+    }
+
+    // Poll for status change
+    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current = setInterval(async () => {
+      try {
+        const sd = await getLoginStatusBySource(source)
+        setStatuses((prev) => ({ ...prev, [source]: sd }))
+        if (sd.logged_in) {
+          if (pollRef.current) {
+            clearInterval(pollRef.current)
+            pollRef.current = null
+          }
+          setMessage(`${LOGIN_URLS[source]?.label || source} 登录成功！`)
+        }
+      } catch {
+        // continue polling
+      }
+    }, 3000)
   }
+
+  if (!show) return null
 
   return (
     <div
@@ -53,27 +130,51 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
           </button>
         </div>
 
-        <div className="flex flex-col gap-3">
-          {Object.entries(LOGIN_URLS).map(([key, { label }]) => (
-            <div
-              key={key}
-              className="flex items-center justify-between p-3 rounded-lg"
-              style={{ backgroundColor: '#F5F9FF' }}
-            >
-              <span className="text-sm font-medium" style={{ color: '#333' }}>{label}</span>
-              <button
-                className="text-xs px-4 py-1.5 rounded text-white transition-colors hover:opacity-90"
-                style={{ backgroundColor: '#42A5F5' }}
-                onClick={() => handleLogin(key)}
-              >
-                去登录
-              </button>
-            </div>
-          ))}
-        </div>
+        {loading ? (
+          <p className="text-xs text-center" style={{ color: '#999' }}>加载中...</p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {ALL_SOURCES.map((key) => {
+              const status = statuses[key]
+              const loggedIn = status?.logged_in || false
+              const label = LOGIN_URLS[key]?.label || key
+              return (
+                <div
+                  key={key}
+                  className="flex items-center justify-between p-3 rounded-lg"
+                  style={{ backgroundColor: '#F5F9FF' }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: loggedIn ? '#4CAF50' : '#ccc' }}
+                    />
+                    <div>
+                      <p className="text-sm font-medium" style={{ color: '#333' }}>{label}</p>
+                      <p className="text-xs" style={{ color: loggedIn ? '#4CAF50' : '#999' }}>
+                        {status?.message || '未登录'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    className="text-xs px-4 py-1.5 rounded text-white transition-colors hover:opacity-90"
+                    style={{ backgroundColor: loggedIn ? '#81C784' : '#42A5F5' }}
+                    onClick={() => handleLogin(key)}
+                  >
+                    {loggedIn ? '重新登录' : '去登录'}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {message && (
+          <p className="mt-3 text-xs text-center" style={{ color: '#1E88E5' }}>{message}</p>
+        )}
 
         <p className="mt-3 text-xs" style={{ color: '#999' }}>
-          点击按钮将在新标签页打开对应招聘网站的登录页面，登录完成后即可返回本页面。
+          点击按钮跳转登录页面，完成登录后系统会自动检测状态（约需等待几秒）。
         </p>
       </div>
     </div>

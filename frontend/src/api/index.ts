@@ -132,3 +132,11 @@ export async function fetchResumeKeywords() {
   return request<{ keywords: string; skills: string[]; positions: string[] }>('/resume/keywords')
 }
 
+export async function getLoginStatus() {
+  return request<{ sources: Record<string, { source: string; logged_in: boolean; message: string; hours_ago?: number }> }>('/auth/login/status')
+}
+
+export async function getLoginStatusBySource(source: string) {
+  return request<{ source: string; logged_in: boolean; message: string; hours_ago?: number }>(`/auth/login/status/${source}`)
+}
+
