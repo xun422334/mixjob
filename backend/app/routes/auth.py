@@ -1,6 +1,7 @@
 import os
+import shutil
 import subprocess
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -24,9 +25,17 @@ SITE_NAMES = {
 }
 
 
+def _find_python() -> str:
+    """Find available python command (python3 or python)."""
+    for cmd in ["python3", "python"]:
+        if shutil.which(cmd):
+            return cmd
+    return "python3"
+
+
 @router.post("/login/{source}")
 async def login_source(source: str):
-    """Launch Playwright browser for user to log in"""
+    """Launch Playwright browser for user to log in (local dev only)."""
     if source not in LOGIN_URLS:
         raise HTTPException(status_code=400, detail=f"不支持的来源: {source}")
 
@@ -37,11 +46,20 @@ async def login_source(source: str):
         "login_helper.py"
     )
 
+    if not os.path.exists(script):
+        raise HTTPException(status_code=500, detail="login_helper.py 不存在")
+
+    python_cmd = _find_python()
     try:
         subprocess.Popen(
-            ["python3", script, source],
+            [python_cmd, script, source],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="服务器环境不支持自动打开浏览器。请使用本地脚本登录后上传状态文件，或使用下方的"上传登录状态"功能。"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"启动登录浏览器失败: {str(e)}")
@@ -50,6 +68,35 @@ async def login_source(source: str):
         "status": "browser_opened",
         "message": f"已打开{SITE_NAMES.get(source, source)}登录页面，请在浏览器中完成登录",
         "login_url": LOGIN_URLS[source],
+    }
+
+
+@router.post("/login/upload/{source}")
+async def upload_login_state(source: str, file: UploadFile = File(...)):
+    """Upload a browser state file from local login."""
+    if source not in LOGIN_URLS:
+        raise HTTPException(status_code=400, detail=f"不支持的来源: {source}")
+
+    os.makedirs(BROWSER_STATE_DIR, exist_ok=True)
+
+    state_file = os.path.join(BROWSER_STATE_DIR, f"{source}_state.json")
+    with open(state_file, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    import json, time
+    meta_file = os.path.join(BROWSER_STATE_DIR, f"{source}_meta.json")
+    with open(meta_file, "w") as f:
+        json.dump({
+            "source": source,
+            "site": SITE_NAMES.get(source, source),
+            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "uploaded": True,
+        }, f, ensure_ascii=False)
+
+    return {
+        "status": "ok",
+        "message": f"{SITE_NAMES.get(source, source)} 登录状态已上传",
     }
 
 

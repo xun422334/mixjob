@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { getLoginStatus, getLoginStatusBySource, uploadLoginState } from '../api'
 
 interface LoginStatus {
   source: string
@@ -27,12 +28,12 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   const fetchStatus = async () => {
     setLoading(true)
     try {
-      const resp = await fetch('/api/auth/login/status')
-      const data = await resp.json()
+      const data = await getLoginStatus()
       setStatuses(data.sources || {})
     } catch {
       setMessage('获取登录状态失败')
@@ -45,7 +46,6 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
     if (show) {
       fetchStatus()
     } else {
-      // Stop polling when modal closes
       if (pollRef.current) {
         clearInterval(pollRef.current)
         pollRef.current = null
@@ -64,15 +64,19 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
     setMessage('')
     try {
       const resp = await fetch(`/api/auth/login/${source}`, { method: 'POST' })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: '启动登录失败' }))
+        setMessage(err.detail || '启动登录失败，请使用下方的"上传状态文件"功能')
+        setActionLoading(null)
+        return
+      }
       const data = await resp.json()
       setMessage(data.message)
 
-      // Start polling for login status every 3 seconds
       if (pollRef.current) clearInterval(pollRef.current)
       pollRef.current = setInterval(async () => {
         try {
-          const sr = await fetch(`/api/auth/login/status/${source}`)
-          const sd = await sr.json()
+          const sd = await getLoginStatusBySource(source)
           setStatuses((prev) => ({ ...prev, [source]: sd }))
           if (sd.logged_in) {
             if (pollRef.current) {
@@ -87,7 +91,21 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
         }
       }, 3000)
     } catch {
-      setMessage('启动登录失败，请重试')
+      setMessage('启动登录失败，请使用下方的"上传状态文件"功能')
+      setActionLoading(null)
+    }
+  }
+
+  const handleUpload = async (source: string, file: File) => {
+    setActionLoading(source)
+    setMessage('')
+    try {
+      const data = await uploadLoginState(source, file)
+      setMessage(data.message || '上传成功')
+      await fetchStatus()
+    } catch {
+      setMessage('上传失败，请重试')
+    } finally {
       setActionLoading(null)
     }
   }
@@ -125,31 +143,57 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
               return (
                 <div
                   key={key}
-                  className="flex items-center justify-between p-3 rounded-lg"
+                  className="flex flex-col p-3 rounded-lg gap-2"
                   style={{ backgroundColor: '#F5F9FF' }}
                 >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: loggedIn ? '#4CAF50' : '#ccc' }}
-                    />
-                    <div>
-                      <p className="text-sm font-medium" style={{ color: '#333' }}>
-                        {SOURCE_LABELS[key] || key}
-                      </p>
-                      <p className="text-xs" style={{ color: loggedIn ? '#4CAF50' : '#999' }}>
-                        {status?.message || '未登录'}
-                      </p>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: loggedIn ? '#4CAF50' : '#ccc' }}
+                      />
+                      <div>
+                        <p className="text-sm font-medium" style={{ color: '#333' }}>
+                          {SOURCE_LABELS[key] || key}
+                        </p>
+                        <p className="text-xs" style={{ color: loggedIn ? '#4CAF50' : '#999' }}>
+                          {status?.message || '未登录'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-1">
+                      <button
+                        className="text-xs px-3 py-1 rounded text-white transition-colors disabled:opacity-50"
+                        style={{ backgroundColor: loggedIn ? '#81C784' : '#42A5F5' }}
+                        onClick={() => handleLogin(key)}
+                        disabled={actionLoading === key}
+                      >
+                        {actionLoading === key ? '等待中...' : loggedIn ? '重新登录' : '一键登录'}
+                      </button>
                     </div>
                   </div>
-                  <button
-                    className="text-xs px-3 py-1 rounded text-white transition-colors disabled:opacity-50"
-                    style={{ backgroundColor: loggedIn ? '#81C784' : '#42A5F5' }}
-                    onClick={() => handleLogin(key)}
-                    disabled={actionLoading === key}
-                  >
-                    {actionLoading === key ? '等待登录...' : loggedIn ? '重新登录' : '登录'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs" style={{ color: '#999' }}>或上传状态文件：</span>
+                    <input
+                      type="file"
+                      accept=".json"
+                      className="hidden"
+                      ref={(el) => { fileInputRefs.current[key] = el }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        if (file) handleUpload(key, file)
+                        e.target.value = ''
+                      }}
+                    />
+                    <button
+                      className="text-xs px-2 py-0.5 rounded border transition-colors disabled:opacity-50"
+                      style={{ borderColor: '#42A5F5', color: '#42A5F5' }}
+                      onClick={() => fileInputRefs.current[key]?.click()}
+                      disabled={actionLoading === key}
+                    >
+                      上传
+                    </button>
+                  </div>
                 </div>
               )
             })}
@@ -161,7 +205,7 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
         )}
 
         <p className="mt-3 text-xs" style={{ color: '#999' }}>
-          点击登录后，系统将打开浏览器窗口，请在浏览器中完成扫码或账号登录。登录成功后浏览器会自动关闭。
+          一键登录：本地开发时自动打开浏览器。上传状态文件：先用本地脚本登录后，上传 browser_states 目录下生成的 *_state.json 文件。
         </p>
       </div>
     </div>

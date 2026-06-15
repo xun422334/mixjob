@@ -23,7 +23,8 @@ class GuopinScraper(BaseScraper):
                 await page.wait_for_timeout(4000)
 
                 cards = await page.query_selector_all("[class*='card']")
-                logger.info(f"国聘 found {len(cards)} cards for keyword={self.keyword}")
+                body_text = await page.inner_text("body")
+                print(f"[GUOPIN] url={page.url} cards={len(cards)} body_len={len(body_text)} body_preview={body_text[:300]}")
 
                 for card in cards[:30]:
                     job_url = search_url

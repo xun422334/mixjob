@@ -58,6 +58,8 @@ class BossZhipinScraper(BaseScraper):
                     raise Exception("BOSS直聘登录状态已过期，请重新登录")
 
                 cards = await page.query_selector_all(".job-card-box")
+                body_text = await page.inner_text("body")
+                print(f"[BOSS] url={page.url} cards={len(cards)} body_len={len(body_text)} body_preview={body_text[:300]}")
 
                 for card in cards[:30]:
                     try:

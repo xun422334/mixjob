@@ -22,6 +22,8 @@ class ZhaopinScraper(BaseScraper):
                 await page.wait_for_timeout(3000)
 
                 cards = await page.query_selector_all(".positionlist .job-list-box, .joblist-box__item, [class*='joblist'] > div")
+                body_text = await page.inner_text("body")
+                print(f"[ZHAOPIN] url={page.url} cards={len(cards)} body_len={len(body_text)} body_preview={body_text[:300]}")
 
                 for card in cards[:30]:
                     try:

@@ -32,6 +32,8 @@ class LiepinScraper(BaseScraper):
                 cards = await page.query_selector_all("[class*='job-list-item'], .job-list-box [class*='job'], .job-list-box > div, .job-list-box > li")
                 if not cards:
                     cards = await page.query_selector_all("[class*='job-card']")
+                body_text = await page.inner_text("body")
+                print(f"[LIEPIN] url={page.url} cards={len(cards)} body_len={len(body_text)} body_preview={body_text[:300]}")
 
                 for card in cards[:30]:
                     try:
