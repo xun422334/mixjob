@@ -1,5 +1,6 @@
+import httpx
+from bs4 import BeautifulSoup
 from .base import BaseScraper
-from playwright.async_api import async_playwright
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ CITY_CODE_LIEPIN = {
 class LiepinScraper(BaseScraper):
     source_name = "猎聘"
     base_url = "https://www.liepin.com"
-    rate_limit_delay = 3.0
+    rate_limit_delay = 2.0
 
     async def scrape(self) -> list[dict]:
         jobs = []
@@ -22,38 +23,49 @@ class LiepinScraper(BaseScraper):
         search_url = f"{self.base_url}/zhaopin/?city={city_code}&key={self.keyword}"
 
         try:
-            async with async_playwright() as p:
-                browser = await p.firefox.launch(headless=True)
-                page = await browser.new_page()
-                await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2000)
+            headers = self._headers()
+            headers["Referer"] = self.base_url
 
-                # 猎聘的岗位在 .job-list-box 内，每个岗位是一个包含 .job-title 等信息的元素
-                cards = await page.query_selector_all("[class*='job-list-item'], .job-list-box [class*='job'], .job-list-box > div, .job-list-box > li")
-                if not cards:
-                    cards = await page.query_selector_all("[class*='job-card']")
-                body_text = await page.inner_text("body")
-                print(f"[LIEPIN] url={page.url} cards={len(cards)} body_len={len(body_text)} body_preview={body_text[:300]}")
+            async with httpx.AsyncClient(
+                headers=headers,
+                timeout=httpx.Timeout(20.0),
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(search_url)
+                print(f"[LIEPIN] status={resp.status_code} url={resp.url} len={len(resp.text)} preview={resp.text[:300]}")
+
+                if resp.status_code != 200:
+                    raise Exception(f"猎聘返回HTTP {resp.status_code}")
+
+                soup = BeautifulSoup(resp.text, "html.parser")
+                cards = (
+                    soup.select("[class*='job-list-item']") or
+                    soup.select(".job-list-box [class*='job']") or
+                    soup.select(".job-list-box > div") or
+                    soup.select(".job-list-box > li") or
+                    soup.select("[class*='job-card']")
+                )
+                print(f"[LIEPIN] cards={len(cards)}")
 
                 for card in cards[:30]:
                     try:
-                        text = (await card.inner_text()).strip()
+                        text = card.get_text().strip()
                         if not text or len(text) < 10:
                             continue
 
-                        title_el = await card.query_selector(".job-title, [class*='job-title'], h3, .title")
-                        company_el = await card.query_selector(".company-name, [class*='company-name'], .company")
-                        salary_el = await card.query_selector(".job-salary, [class*='salary'], .text-warning")
-                        date_el = await card.query_selector(".time, [class*='time'], [class*='date'], .publish-time")
-                        link_el = await card.query_selector("a[href*='/job/']")
+                        title_el = card.select_one(".job-title, [class*='job-title'], h3, .title")
+                        company_el = card.select_one(".company-name, [class*='company-name'], .company")
+                        salary_el = card.select_one(".job-salary, [class*='salary'], .text-warning")
+                        date_el = card.select_one(".time, [class*='time'], [class*='date'], .publish-time")
+                        link_el = card.select_one("a[href*='/job/']")
 
-                        title = (await title_el.inner_text()).strip() if title_el else ""
-                        company = (await company_el.inner_text()).strip() if company_el else ""
-                        salary = (await salary_el.inner_text()).strip() if salary_el else ""
-                        posted_date = (await date_el.inner_text()).strip() if date_el else ""
+                        title = title_el.get_text().strip() if title_el else ""
+                        company = company_el.get_text().strip() if company_el else ""
+                        salary = salary_el.get_text().strip() if salary_el else ""
+                        posted_date = date_el.get_text().strip() if date_el else ""
                         job_url = ""
                         if link_el:
-                            href = await link_el.get_attribute("href")
+                            href = link_el.get("href", "")
                             if href:
                                 job_url = href if href.startswith("http") else f"{self.base_url}{href}"
 
@@ -69,11 +81,9 @@ class LiepinScraper(BaseScraper):
                                                 company = line
                                                 break
 
-                        # Only accept if we have both and company looks reasonable
                         if title and company and len(company) >= 4 and not company.endswith(("区", "县", "市")):
                             company = self._clean_company(company)
                             salary = self._clean_salary(salary)
-                            # Extract description from remaining text (not title/company/salary)
                             desc = self._extract_description(text, title, company, salary, posted_date)
                             jobs.append({
                                 "title": title,
@@ -83,15 +93,14 @@ class LiepinScraper(BaseScraper):
                                 "description": desc,
                                 "requirements": "",
                                 "location": "",
-                                "source_url": job_url or search_url,
+                                "source_url": job_url or str(resp.url),
                                 "posted_date": posted_date,
                             })
                     except Exception as e:
                         logger.debug(f"猎聘解析单条失败: {e}")
                         continue
 
-                await browser.close()
         except Exception as e:
-            logger.warning(f"猎聘Playwright抓取失败: {e}")
+            logger.warning(f"猎聘抓取失败: {e}")
 
         return jobs

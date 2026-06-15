@@ -1,5 +1,6 @@
+import httpx
+from bs4 import BeautifulSoup
 from .base import BaseScraper
-from playwright.async_api import async_playwright
 import logging
 
 logger = logging.getLogger(__name__)
@@ -8,40 +9,34 @@ logger = logging.getLogger(__name__)
 class GuopinScraper(BaseScraper):
     source_name = "国聘"
     base_url = "https://www.iguopin.com"
-    rate_limit_delay = 3.0
+    rate_limit_delay = 2.0
 
     async def scrape(self) -> list[dict]:
         jobs = []
         search_url = f"{self.base_url}/job?keyword={self.keyword}"
 
         try:
-            async with async_playwright() as p:
-                browser = await p.firefox.launch(headless=True)
-                context = await browser.new_context()
-                page = await context.new_page()
-                await page.goto(search_url, timeout=60000, wait_until="networkidle")
-                await page.wait_for_timeout(2000)
+            headers = self._headers()
+            headers["Referer"] = self.base_url
 
-                cards = await page.query_selector_all("[class*='card']")
-                body_text = await page.inner_text("body")
-                print(f"[GUOPIN] url={page.url} cards={len(cards)} body_len={len(body_text)} body_preview={body_text[:300]}")
+            async with httpx.AsyncClient(
+                headers=headers,
+                timeout=httpx.Timeout(20.0),
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(search_url)
+                print(f"[GUOPIN] status={resp.status_code} url={resp.url} len={len(resp.text)} preview={resp.text[:300]}")
+
+                if resp.status_code != 200:
+                    raise Exception(f"国聘返回HTTP {resp.status_code}")
+
+                soup = BeautifulSoup(resp.text, "html.parser")
+                cards = soup.select("[class*='card']")
+                print(f"[GUOPIN] cards={len(cards)}")
 
                 for card in cards[:30]:
-                    job_url = search_url
-                    popup_url = None
-
                     try:
-                        # Extract job detail URL by clicking .job-name and capturing popup
-                        name_el = await card.query_selector(".job-name")
-                        if name_el:
-                            async with page.expect_popup(timeout=5000) as popup_info:
-                                await name_el.click()
-                            popup = await popup_info.value
-                            popup_url = popup.url
-                            await popup.close()
-                            await page.wait_for_timeout(500)
-
-                        text = (await card.inner_text()).strip()
+                        text = card.get_text().strip()
                         if not text or len(text) < 15:
                             continue
 
@@ -51,7 +46,6 @@ class GuopinScraper(BaseScraper):
 
                         title = lines[0]
 
-                        # Location: look for line with 「...」
                         location = ""
                         city = self.city
                         for line in lines:
@@ -63,14 +57,12 @@ class GuopinScraper(BaseScraper):
                                         break
                                 break
 
-                        # Salary/experience/education line
                         salary = ""
                         for line in lines:
                             if "面议" in line or "K" in line or "万" in line:
                                 salary = line
                                 break
 
-                        # Company name: look for company indicators
                         company = ""
                         for line in lines:
                             if any(kw in line for kw in ["有限公司", "科技", "集团", "股份", "网络", "信息", "软件", "数据", "技术"]):
@@ -85,14 +77,18 @@ class GuopinScraper(BaseScraper):
                                         company = candidate
                                         break
 
-                        # Extract description from remaining text
+                        link_el = card.select_one("a[href]")
+                        job_url = str(resp.url)
+                        if link_el:
+                            href = link_el.get("href", "")
+                            if href:
+                                job_url = href if href.startswith("http") else f"{self.base_url}{href}"
+
                         desc = self._extract_description(text, title, company or "", salary, "")
 
                         if title and company and len(company) >= 4:
                             company = self._clean_company(company)
                             salary_clean = self._clean_salary(salary)
-                            if popup_url:
-                                job_url = popup_url
                             jobs.append({
                                 "title": title,
                                 "company": company,
@@ -108,8 +104,7 @@ class GuopinScraper(BaseScraper):
                         logger.debug(f"国聘解析单条失败: {e}")
                         continue
 
-                await browser.close()
         except Exception as e:
-            logger.warning(f"国聘Playwright抓取失败: {e}")
+            logger.warning(f"国聘抓取失败: {e}")
 
         return jobs

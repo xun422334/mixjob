@@ -1,5 +1,6 @@
+import httpx
+from bs4 import BeautifulSoup
 from .base import BaseScraper
-from playwright.async_api import async_playwright
 import logging
 
 logger = logging.getLogger(__name__)
@@ -8,39 +9,51 @@ logger = logging.getLogger(__name__)
 class ZhaopinScraper(BaseScraper):
     source_name = "智联招聘"
     base_url = "https://sou.zhaopin.com"
-    rate_limit_delay = 3.0
+    rate_limit_delay = 2.0
 
     async def scrape(self) -> list[dict]:
         jobs = []
         search_url = f"{self.base_url}/?jl={self.city}&kw={self.keyword}&p=1"
 
         try:
-            async with async_playwright() as p:
-                browser = await p.firefox.launch(headless=True)
-                page = await browser.new_page()
-                await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2000)
+            headers = self._headers()
+            headers["Referer"] = self.base_url
 
-                cards = await page.query_selector_all(".positionlist .job-list-box, .joblist-box__item, [class*='joblist'] > div")
-                body_text = await page.inner_text("body")
-                print(f"[ZHAOPIN] url={page.url} cards={len(cards)} body_len={len(body_text)} body_preview={body_text[:300]}")
+            async with httpx.AsyncClient(
+                headers=headers,
+                timeout=httpx.Timeout(20.0),
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(search_url)
+                print(f"[ZHAOPIN] status={resp.status_code} url={resp.url} len={len(resp.text)} preview={resp.text[:300]}")
+
+                if resp.status_code != 200:
+                    raise Exception(f"智联招聘返回HTTP {resp.status_code}")
+
+                soup = BeautifulSoup(resp.text, "html.parser")
+                cards = (
+                    soup.select(".positionlist .job-list-box") or
+                    soup.select(".joblist-box__item") or
+                    soup.select("[class*='joblist'] > div")
+                )
+                print(f"[ZHAOPIN] cards={len(cards)}")
 
                 for card in cards[:30]:
                     try:
-                        title_el = await card.query_selector(".job-name, .job-title, [class*='job-name'], a[href*='job']")
-                        company_el = await card.query_selector(".company-name, .complay-name, [class*='company']")
-                        salary_el = await card.query_selector(".salary, .job-salary, [class*='salary']")
-                        date_el = await card.query_selector(".time, [class*='time'], [class*='date'], .publish-time")
-                        link_el = await card.query_selector("a[href*='jobdetail']")
+                        title_el = card.select_one(".job-name, .job-title, [class*='job-name'], a[href*='job']")
+                        company_el = card.select_one(".company-name, .complay-name, [class*='company']")
+                        salary_el = card.select_one(".salary, .job-salary, [class*='salary']")
+                        date_el = card.select_one(".time, [class*='time'], [class*='date'], .publish-time")
+                        link_el = card.select_one("a[href*='jobdetail']")
 
-                        text = (await card.inner_text()).strip()
-                        title = (await title_el.inner_text()).strip() if title_el else ""
-                        company = (await company_el.inner_text()).strip() if company_el else ""
-                        salary = (await salary_el.inner_text()).strip() if salary_el else ""
-                        posted_date = (await date_el.inner_text()).strip() if date_el else ""
+                        text = card.get_text().strip()
+                        title = title_el.get_text().strip() if title_el else ""
+                        company = company_el.get_text().strip() if company_el else ""
+                        salary = salary_el.get_text().strip() if salary_el else ""
+                        posted_date = date_el.get_text().strip() if date_el else ""
                         job_url = ""
                         if link_el:
-                            href = await link_el.get_attribute("href")
+                            href = link_el.get("href", "")
                             if href:
                                 job_url = href if href.startswith("http") else f"{self.base_url}{href}"
 
@@ -56,15 +69,14 @@ class ZhaopinScraper(BaseScraper):
                                 "description": desc,
                                 "requirements": "",
                                 "location": "",
-                                "source_url": job_url or search_url,
+                                "source_url": job_url or str(resp.url),
                                 "posted_date": posted_date,
                             })
                     except Exception as e:
                         logger.debug(f"智联招聘解析单条失败: {e}")
                         continue
 
-                await browser.close()
         except Exception as e:
-            logger.warning(f"智联招聘Playwright抓取失败: {e}")
+            logger.warning(f"智联招聘抓取失败: {e}")
 
         return jobs
