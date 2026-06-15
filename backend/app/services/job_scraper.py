@@ -18,16 +18,15 @@ async def scrape_jobs(
     if sources is None:
         sources = list(SCRAPER_REGISTRY.keys())
 
-    # 1. Run all scrapers concurrently with staggered start
-    tasks = []
-    for i, src_key in enumerate(sources):
+    # 1. Run scrapers sequentially (one browser at a time to save memory)
+    results_list = []
+    for src_key in sources:
         scraper_cls = SCRAPER_REGISTRY.get(src_key)
         if scraper_cls is None:
             continue
         scraper = scraper_cls(city=city, keyword=keyword)
-        tasks.append(_run_one(src_key, scraper, delay=i * 0.5))
-
-    results_list = await asyncio.gather(*tasks, return_exceptions=True)
+        result = await _run_one(src_key, scraper)
+        results_list.append(result)
 
     # 2. Collect per-source results
     per_source = {}
@@ -100,10 +99,15 @@ async def _run_one(src_key: str, scraper, delay: float = 0):
     if delay > 0:
         await asyncio.sleep(delay)
     try:
-        result = await scraper.scrape()
+        logger.info(f"[{src_key}] Starting scrape for keyword={scraper.keyword}...")
+        result = await asyncio.wait_for(scraper.scrape(), timeout=30)
         for job in result:
-            job["source"] = scraper.source_name  # Chinese display name
+            job["source"] = scraper.source_name
+        logger.info(f"[{src_key}] Done: {len(result)} jobs")
         return (src_key, result)
+    except asyncio.TimeoutError:
+        logger.warning(f"[{src_key}] Timed out after 30s")
+        return (src_key, Exception(f"抓取超时"))
     except Exception as e:
-        logger.warning(f"Scraper {src_key} failed: {e}")
+        logger.warning(f"[{src_key}] Failed: {e}")
         return (src_key, e)
