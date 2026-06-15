@@ -59,7 +59,7 @@ async def login_source(source: str):
     except FileNotFoundError:
         raise HTTPException(
             status_code=500,
-            detail="服务器环境不支持自动打开浏览器。请使用本地脚本登录后上传状态文件，或使用下方的"上传登录状态"功能。"
+            detail="服务器环境不支持自动打开浏览器。请使用本地脚本登录后上传状态文件，或使用下方的'上传登录状态'功能。"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"启动登录浏览器失败: {str(e)}")
