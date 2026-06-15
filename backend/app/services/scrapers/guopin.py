@@ -20,7 +20,7 @@ class GuopinScraper(BaseScraper):
                 context = await browser.new_context()
                 page = await context.new_page()
                 await page.goto(search_url, timeout=60000, wait_until="networkidle")
-                await page.wait_for_timeout(4000)
+                await page.wait_for_timeout(2000)
 
                 cards = await page.query_selector_all("[class*='card']")
                 body_text = await page.inner_text("body")

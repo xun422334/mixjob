@@ -19,7 +19,7 @@ class ZhaopinScraper(BaseScraper):
                 browser = await p.firefox.launch(headless=True)
                 page = await browser.new_page()
                 await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(2000)
 
                 cards = await page.query_selector_all(".positionlist .job-list-box, .joblist-box__item, [class*='joblist'] > div")
                 body_text = await page.inner_text("body")

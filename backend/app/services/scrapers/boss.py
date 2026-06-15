@@ -46,11 +46,11 @@ class BossZhipinScraper(BaseScraper):
 
                 # Visit home page first to establish session
                 await page.goto(self.base_url, timeout=30000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(1000)
 
                 # Navigate to search page
                 await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(4000)
+                await page.wait_for_timeout(2000)
 
                 # Check if redirected to login/passport
                 if any(kw in page.url.lower() for kw in ["login", "register", "passport"]):

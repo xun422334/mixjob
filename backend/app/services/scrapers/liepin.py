@@ -26,7 +26,7 @@ class LiepinScraper(BaseScraper):
                 browser = await p.firefox.launch(headless=True)
                 page = await browser.new_page()
                 await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(4000)
+                await page.wait_for_timeout(2000)
 
                 # 猎聘的岗位在 .job-list-box 内，每个岗位是一个包含 .job-title 等信息的元素
                 cards = await page.query_selector_all("[class*='job-list-item'], .job-list-box [class*='job'], .job-list-box > div, .job-list-box > li")

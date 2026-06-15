@@ -100,13 +100,13 @@ async def _run_one(src_key: str, scraper, delay: float = 0):
         await asyncio.sleep(delay)
     try:
         logger.info(f"[{src_key}] Starting scrape for keyword={scraper.keyword}...")
-        result = await asyncio.wait_for(scraper.scrape(), timeout=30)
+        result = await asyncio.wait_for(scraper.scrape(), timeout=60)
         for job in result:
             job["source"] = scraper.source_name
         logger.info(f"[{src_key}] Done: {len(result)} jobs")
         return (src_key, result)
     except asyncio.TimeoutError:
-        logger.warning(f"[{src_key}] Timed out after 30s")
+        logger.warning(f"[{src_key}] Timed out after 60s")
         return (src_key, Exception(f"抓取超时"))
     except Exception as e:
         logger.warning(f"[{src_key}] Failed: {e}")
