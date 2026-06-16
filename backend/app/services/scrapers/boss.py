@@ -1,6 +1,6 @@
 import os
 import json
-from bs4 import BeautifulSoup
+import asyncio
 from playwright.async_api import async_playwright
 from .base import BaseScraper
 import logging
@@ -27,93 +27,110 @@ class BossZhipinScraper(BaseScraper):
         city_code = CITY_CODE_MAP.get(self.city, "101010100")
         search_url = f"{self.base_url}/web/geek/job?query={self.keyword}&city={city_code}"
 
+        if not os.path.exists(STATE_FILE):
+            logger.warning("BOSS直聘未登录，请先点击导航栏[登录招聘网站]完成登录后再抓取")
+            return jobs
+
         try:
             async with async_playwright() as p:
                 browser = await p.firefox.launch(headless=True)
-                context_kwargs = {"viewport": {"width": 1280, "height": 800}}
-
-                if os.path.exists(STATE_FILE):
-                    context_kwargs["storage_state"] = STATE_FILE
-                else:
-                    raise Exception("BOSS直聘未登录，请先点击导航栏[登录招聘网站]完成登录后再抓取")
-
-                context = await browser.new_context(**context_kwargs)
+                context = await browser.new_context(
+                    viewport={"width": 1280, "height": 800},
+                    storage_state=STATE_FILE
+                )
                 page = await context.new_page()
 
-                await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(3000)
+                # Hide webdriver to bypass anti-bot detection
+                await page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => false,
+                    });
+                """)
 
-                current_url = page.url
-                if any(kw in current_url.lower() for kw in ["login", "register", "passport"]):
-                    await browser.close()
-                    raise Exception("BOSS直聘登录状态已过期，请重新登录")
+                # Capture the successful joblist API response
+                api_data_future = asyncio.get_event_loop().create_future()
 
-                html = await page.content()
-                soup = BeautifulSoup(html, "html.parser")
-                cards = soup.select(".job-card-wrap, .job-card-box, li[class*='job-card']")
-                logger.info(f"[BOSS] Found {len(cards)} cards")
-
-                for card in cards[:30]:
+                async def on_response(response):
+                    if api_data_future.done():
+                        return
+                    if "joblist.json" not in response.url:
+                        return
                     try:
-                        text = card.get_text().strip()
-                        if not text or len(text) < 10:
-                            continue
+                        body = await response.text()
+                        data = json.loads(body)
+                        if data.get("code") == 0:
+                            api_data_future.set_result(data)
+                    except Exception:
+                        pass
 
-                        title_el = card.select_one(".job-name, [class*='job-name'], .job-title, [class*='job-title']")
-                        company_el = card.select_one(".company-name, [class*='company-name']")
-                        salary_el = card.select_one(".salary, [class*='salary'], .red")
-                        area_el = card.select_one(".job-area, [class*='job-area'], .area")
-                        link_el = card.select_one("a[href*='job_detail']")
+                page.on("response", on_response)
 
-                        title = title_el.get_text().strip() if title_el else ""
-                        company = company_el.get_text().strip() if company_el else ""
-                        salary = salary_el.get_text().strip() if salary_el else ""
-                        area = area_el.get_text().strip() if area_el else ""
-                        job_url = ""
-                        if link_el:
-                            href = link_el.get("href", "")
-                            if href:
-                                job_url = href if href.startswith("http") else f"{self.base_url}{href}"
+                await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
+
+                # Wait for the API to return successfully (up to 20s)
+                try:
+                    data = await asyncio.wait_for(api_data_future, timeout=20)
+                except asyncio.TimeoutError:
+                    logger.warning("BOSS直聘搜索API未返回数据（超时）")
+                    await browser.close()
+                    return jobs
+
+                await browser.close()
+
+                zp = data.get("zpData", {})
+                job_list = zp.get("jobList", [])
+                logger.info(f"[BOSS] Found {len(job_list)} jobs from API (total: {zp.get('resCount', 0)})")
+
+                for job in job_list:
+                    try:
+                        title = job.get("jobName", "").strip()
+                        company = job.get("brandName", "").strip()
+                        salary = job.get("salaryDesc", "").strip()
+                        city = job.get("cityName", "") or self.city
+                        area = job.get("areaDistrict", "")
+                        experience = job.get("jobExperience", "")
+                        degree = job.get("jobDegree", "")
+                        skills = job.get("skills", [])
+                        boss_name = job.get("bossName", "")
+                        boss_title = job.get("bossTitle", "")
+                        encrypt_id = job.get("encryptId", "")
+                        security_id = job.get("securityId", "")
+                        lid = zp.get("lid", "")
 
                         if not title or not company:
-                            lines = [l.strip() for l in text.split("\n") if l.strip()]
-                            if lines:
-                                if not title:
-                                    title = lines[0]
-                                if not company:
-                                    for line in lines:
-                                        if any(kw in line for kw in ["有限公司", "科技", "集团", "网络", "信息", "软件"]):
-                                            company = line
-                                            break
+                            continue
 
-                        if title and company:
-                            title = title.split("\n")[0].strip()
-                            company = self._clean_company(company)
-                            salary = self._clean_salary(salary)
+                        company = self._clean_company(company)
+                        salary = self._clean_salary(salary)
 
-                            city = self.city
-                            if area:
-                                for c in CITY_CODE_MAP:
-                                    if c in area:
-                                        city = c
-                                        break
+                        desc_parts = []
+                        if experience:
+                            desc_parts.append(f"经验: {experience}")
+                        if degree:
+                            desc_parts.append(f"学历: {degree}")
+                        if boss_name:
+                            desc_parts.append(f"HR: {boss_name}({boss_title})" if boss_title else f"HR: {boss_name}")
 
-                            jobs.append({
-                                "title": title,
-                                "company": company,
-                                "city": city,
-                                "salary": salary,
-                                "description": "",
-                                "requirements": "",
-                                "location": area,
-                                "source_url": job_url or str(current_url),
-                                "posted_date": "",
-                            })
+                        source_url = ""
+                        if encrypt_id:
+                            source_url = f"{self.base_url}/job_detail/{encrypt_id}.html"
+                        elif security_id:
+                            source_url = f"{self.base_url}/job_detail/{security_id}.html"
+
+                        jobs.append({
+                            "title": title,
+                            "company": company,
+                            "city": city,
+                            "salary": salary,
+                            "description": " | ".join(desc_parts),
+                            "requirements": ", ".join(skills) if skills else "",
+                            "location": area,
+                            "source_url": source_url or str(search_url),
+                            "posted_date": "",
+                        })
                     except Exception as e:
                         logger.debug(f"BOSS直聘解析单条失败: {e}")
                         continue
-
-                await browser.close()
 
         except Exception as e:
             logger.warning(f"BOSS直聘抓取失败: {e}")
