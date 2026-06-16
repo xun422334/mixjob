@@ -5,90 +5,39 @@
 1. 打开 [阿里云轻量应用服务器](https://swas.console.aliyun.com/)
 2. 选择配置：
    - **地域**：选离你最近的（杭州/上海/北京）
-   - **镜像**：Ubuntu 22.04
-   - **套餐**：2核1G（~40元/月），够用了
+   - **镜像**：Ubuntu 24.04
+   - **套餐**：2核2G（~68元/月），1G 内存跑 Firefox 可能不够
 3. 购买后在控制台设置 **root 密码**
-4. 在防火墙规则中开放端口：**22**（SSH）、**80**（HTTP）、**443**（HTTPS）、**8000**（后端）
+4. 防火墙规则开放端口：**22**、**80**、**443**、**8000**
 
-## 二、登录服务器
-
-```bash
-ssh root@<你的服务器公网IP>
-```
-
-## 三、安装 Docker
+## 二、登录服务器 & 安装 Docker
 
 ```bash
+ssh root@<服务器IP>
+
+# 安装 Docker
 curl -fsSL https://get.docker.com | bash
 ```
 
-## 四、拉取项目并构建
+## 三、拉取项目
 
 ```bash
 git clone https://github.com/xun422334/mixjob.git /opt/mixjob
 cd /opt/mixjob
 ```
 
-修改 Dockerfile 添加 Playwright 支持：
+项目已有 Dockerfile，无需修改。
 
-```dockerfile
-FROM python:3.12-slim
-
-WORKDIR /app
-
-# 安装 Playwright 依赖 + Xvfb（虚拟显示器）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    xvfb \
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0t64 \
-    libatk-bridge2.0-0t64 \
-    libcups2t64 \
-    libdrm2 \
-    libdbus-1-3 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libasound2t64 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN python -m playwright install firefox
-
-COPY backend/ .
-
-EXPOSE 8000
-
-CMD ["python", "-c", "import os, uvicorn; uvicorn.run('app.main:app', host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))"]
-```
-
-构建镜像：
+## 四、启动服务
 
 ```bash
+# 构建并启动
 docker build -t mixjob .
-```
-
-## 五、启动服务
-
-```bash
-# 创建数据持久化目录
-mkdir -p /opt/mixjob/data /opt/mixjob/browser_states
-
-# 启动容器
 docker run -d \
   --name mixjob \
   --restart always \
   -p 8000:8000 \
   -v /opt/mixjob/data:/app/data \
-  -v /opt/mixjob/browser_states:/app/browser_states \
-  -e DEEPSEEK_API_KEY=sk-589243dffe2843df8c743c5a10515e41 \
   mixjob
 ```
 
@@ -96,38 +45,36 @@ docker run -d \
 
 ```bash
 curl http://localhost:8000/api/health
-# 应返回 {"status":"ok"}
+# 返回 {"status":"ok"}
 ```
 
-## 六、更新前端 API 地址
+## 五、更新前端 API 地址
 
-修改 [frontend/src/api/index.ts](../frontend/src/api/index.ts) 第1行：
+修改 [frontend/src/api/index.ts](../frontend/src/api/index.ts) 第1行，将 Render 地址改为阿里云地址：
 
 ```typescript
-const BASE = import.meta.env.DEV ? '/api' : 'http://<你的服务器IP>:8000/api'
+const BASE = import.meta.env.DEV ? '/api' : 'http://<服务器IP>:8000/api'
 ```
 
-然后重新构建部署到 Vercel：
+如果在后面配置了域名，则改为：
+
+```typescript
+const BASE = import.meta.env.DEV ? '/api' : 'https://api.mixjob.cn/api'
+```
+
+修改后重新部署前端到 Vercel（push 到 GitHub 即可自动部署）。
+
+## 六、配置域名 + HTTPS（推荐）
+
+在阿里云 DNS 添加 A 记录：`api.mixjob.cn` → 服务器 IP
+
+然后在服务器上配置 Nginx + 免费 HTTPS：
 
 ```bash
-cd frontend && npm run build
-# 把 dist/ 部署到 Vercel
-```
+apt install -y nginx certbot python3-certbot-nginx
 
-## 七、配置域名（可选）
-
-如果想用 `api.mixjob.cn` 指向后端：
-
-1. 在阿里云 DNS 添加 A 记录：`api.mixjob.cn` → 服务器 IP
-2. 在服务器上安装 Nginx 反向代理：
-
-```bash
-apt install -y nginx
-```
-
-添加配置 `/etc/nginx/sites-available/mixjob`：
-
-```nginx
+# Nginx 反向代理配置
+cat > /etc/nginx/sites-available/mixjob << 'NGINX'
 server {
     listen 80;
     server_name api.mixjob.cn;
@@ -136,34 +83,20 @@ server {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 }
-```
+NGINX
 
-```bash
 ln -s /etc/nginx/sites-available/mixjob /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
+
+# 申请免费 SSL 证书
+certbot --nginx -d api.mixjob.cn --non-interactive --agree-tos -m your@email.com
 ```
 
-3. 前端 API 地址改为 `https://api.mixjob.cn/api`
-
-## 八、Playwright 登录流程在服务器上的工作方式
-
-服务器上用 `xvfb-run` 启动虚拟显示器，Playwright 才能打开浏览器：
-
-修改 [backend/app/routes/auth.py](../backend/app/routes/auth.py) 的 `login_source` 函数，`subprocess.Popen` 那行改为：
-
-```python
-subprocess.Popen(
-    ["xvfb-run", "-a", python_cmd, script, source],
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-)
-```
-
-这样即使用户在云端，点击"一键登录"也能在服务器上打开无头浏览器完成自动抓取。
-
-## 九、后续更新
+## 七、后续更新
 
 每次更新代码后：
 
@@ -177,15 +110,13 @@ docker run -d \
   --restart always \
   -p 8000:8000 \
   -v /opt/mixjob/data:/app/data \
-  -v /opt/mixjob/browser_states:/app/browser_states \
-  -e DEEPSEEK_API_KEY=sk-589243dffe2843df8c743c5a10515e41 \
   mixjob
 ```
 
-或者写一个 `docker-compose.yml` 简化：
+或者用 docker compose（更方便）：
 
 ```yaml
-version: "3"
+# docker-compose.yml（项目已包含）
 services:
   mixjob:
     build: .
@@ -194,9 +125,6 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
-      - ./browser_states:/app/browser_states
-    environment:
-      - DEEPSEEK_API_KEY=sk-589243dffe2843df8c743c5a10515e41
 ```
 
 之后更新只需：
@@ -204,3 +132,14 @@ services:
 ```bash
 git pull && docker compose up -d --build
 ```
+
+## 八、登录招聘网站
+
+阿里云服务器有 2GB 内存，足以运行 Playwright Firefox。用户在 `mixjob.cn` 点击"一键登录"后：
+
+1. 服务器后台启动 Playwright Firefox
+2. 浏览器窗口打开招聘网站登录页
+3. 用户完成登录后，cookie 自动保存到服务器的 `browser_states/` 目录
+4. 后续抓取自动使用已保存的登录状态
+
+无需额外配置 Xvfb，Docker 容器内 Playwright 的 headless 模式直接可用。
