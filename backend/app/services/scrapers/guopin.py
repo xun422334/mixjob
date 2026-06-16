@@ -1,5 +1,6 @@
-import httpx
+import re
 from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright
 from .base import BaseScraper
 import logging
 
@@ -13,96 +14,78 @@ class GuopinScraper(BaseScraper):
 
     async def scrape(self) -> list[dict]:
         jobs = []
-        search_url = f"{self.base_url}/job?keyword={self.keyword}"
+        search_url = f"{self.base_url}/job?keyword={self.keyword}&city={self.city}"
 
         try:
-            headers = self._headers()
-            headers["Referer"] = self.base_url
+            async with async_playwright() as p:
+                browser = await p.firefox.launch(headless=True)
+                context = await browser.new_context(viewport={"width": 1280, "height": 800})
+                page = await context.new_page()
 
-            async with httpx.AsyncClient(
-                headers=headers,
-                timeout=httpx.Timeout(20.0),
-                follow_redirects=True,
-            ) as client:
-                resp = await client.get(search_url)
-                print(f"[GUOPIN] status={resp.status_code} url={resp.url} len={len(resp.text)} preview={resp.text[:300]}")
+                await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
+                await page.wait_for_timeout(3000)
 
-                if resp.status_code != 200:
-                    raise Exception(f"国聘返回HTTP {resp.status_code}")
+                html = await page.content()
+                soup = BeautifulSoup(html, "html.parser")
 
-                soup = BeautifulSoup(resp.text, "html.parser")
-                cards = soup.select("[class*='card']")
-                print(f"[GUOPIN] cards={len(cards)}")
+                # Each job card has .job-left (title/salary) and .job-right (company)
+                left_parts = soup.select(".job-left")
+                right_parts = soup.select(".job-right")
+                logger.info(f"[GUOPIN] Found {len(left_parts)} job-left / {len(right_parts)} job-right")
 
-                for card in cards[:30]:
+                for i, left in enumerate(left_parts[:30]):
                     try:
-                        text = card.get_text().strip()
-                        if not text or len(text) < 15:
+                        left_text = left.get_text(" ", strip=True)
+                        if not left_text or len(left_text) < 5:
                             continue
 
-                        lines = [l.strip() for l in text.split("\n") if l.strip()]
-                        if len(lines) < 2:
-                            continue
+                        # Extract title (before bracket or first space)
+                        title_match = re.match(r'^(.+?)「', left_text)
+                        title = title_match.group(1).strip() if title_match else left_text.split(" ")[0]
 
-                        title = lines[0]
+                        # Extract location from 「」
+                        loc_match = re.search(r'「(.+?)」', left_text)
+                        area = loc_match.group(1) if loc_match else ""
 
-                        location = ""
-                        city = self.city
-                        for line in lines:
-                            if line.startswith("「") and line.endswith("」"):
-                                location = line.strip("「」")
-                                for c in ["北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "南京", "苏州", "西安", "重庆", "天津"]:
-                                    if c in location:
-                                        city = c
-                                        break
-                                break
+                        # Extract salary
+                        salary_match = re.search(r'(\d+~\d+[Kk万]|面议)[^\s]*', left_text)
+                        salary = salary_match.group(1) if salary_match else ""
 
-                        salary = ""
-                        for line in lines:
-                            if "面议" in line or "K" in line or "万" in line:
-                                salary = line
-                                break
-
+                        # Company from corresponding right part
                         company = ""
-                        for line in lines:
-                            if any(kw in line for kw in ["有限公司", "科技", "集团", "股份", "网络", "信息", "软件", "数据", "技术"]):
-                                if not any(skip in line for skip in ["人", "最佳雇主", "已上市", "软件和信息技术", "专业技术"]):
-                                    company = line
+                        if i < len(right_parts):
+                            right_text = right_parts[i].get_text(" ", strip=True)
+                            # Company name is the first meaningful text segment
+                            company_parts = right_text.split(" ")
+                            if company_parts:
+                                company = company_parts[0]
+
+                        city = self.city
+                        if area:
+                            for c in ["北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "南京", "苏州", "西安", "重庆", "天津"]:
+                                if c in area:
+                                    city = c
                                     break
-                        if not company and len(lines) > 3:
-                            for i, line in enumerate(lines):
-                                if line == salary and i + 1 < len(lines):
-                                    candidate = lines[i + 1]
-                                    if "不限" not in candidate and len(candidate) >= 4:
-                                        company = candidate
-                                        break
-
-                        link_el = card.select_one("a[href]")
-                        job_url = str(resp.url)
-                        if link_el:
-                            href = link_el.get("href", "")
-                            if href:
-                                job_url = href if href.startswith("http") else f"{self.base_url}{href}"
-
-                        desc = self._extract_description(text, title, company or "", salary, "")
 
                         if title and company and len(company) >= 4:
                             company = self._clean_company(company)
-                            salary_clean = self._clean_salary(salary)
+                            salary = self._clean_salary(salary)
                             jobs.append({
                                 "title": title,
                                 "company": company,
                                 "city": city,
-                                "salary": salary_clean,
-                                "description": desc,
+                                "salary": salary,
+                                "description": "",
                                 "requirements": "",
-                                "location": location,
-                                "source_url": job_url,
+                                "location": area,
+                                "source_url": str(page.url),
                                 "posted_date": "",
                             })
                     except Exception as e:
                         logger.debug(f"国聘解析单条失败: {e}")
                         continue
+
+                await browser.close()
 
         except Exception as e:
             logger.warning(f"国聘抓取失败: {e}")

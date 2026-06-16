@@ -1,7 +1,7 @@
 import os
 import json
-import httpx
 from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright
 from .base import BaseScraper
 import logging
 
@@ -25,40 +25,33 @@ class BossZhipinScraper(BaseScraper):
     async def scrape(self) -> list[dict]:
         jobs = []
         city_code = CITY_CODE_MAP.get(self.city, "101010100")
-        search_url = f"{self.base_url}/web/geek/jobs?query={self.keyword}&city={city_code}&page=1"
-
-        if not os.path.exists(STATE_FILE):
-            raise Exception('BOSS直聘未登录，请点击导航栏[登录招聘网站]按钮，选择BOSS直聘完成登录后再抓取')
+        search_url = f"{self.base_url}/web/geek/job?query={self.keyword}&city={city_code}"
 
         try:
-            with open(STATE_FILE) as f:
-                state = json.load(f)
+            async with async_playwright() as p:
+                browser = await p.firefox.launch(headless=True)
+                context_kwargs = {"viewport": {"width": 1280, "height": 800}}
 
-            cookies = {}
-            for c in state.get("cookies", []):
-                cookies[c["name"]] = c["value"]
+                if os.path.exists(STATE_FILE):
+                    context_kwargs["storage_state"] = STATE_FILE
+                else:
+                    raise Exception("BOSS直聘未登录，请先点击导航栏[登录招聘网站]完成登录后再抓取")
 
-            headers = self._headers()
-            headers["Referer"] = self.base_url
+                context = await browser.new_context(**context_kwargs)
+                page = await context.new_page()
 
-            async with httpx.AsyncClient(
-                cookies=cookies,
-                headers=headers,
-                timeout=httpx.Timeout(20.0),
-                follow_redirects=True,
-            ) as client:
-                resp = await client.get(search_url)
-                print(f"[BOSS] status={resp.status_code} url={resp.url} len={len(resp.text)} preview={resp.text[:300]}")
+                await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
+                await page.wait_for_timeout(3000)
 
-                if resp.status_code != 200:
-                    raise Exception(f"BOSS直聘返回HTTP {resp.status_code}")
-
-                if any(kw in str(resp.url).lower() for kw in ["login", "register", "passport"]):
+                current_url = page.url
+                if any(kw in current_url.lower() for kw in ["login", "register", "passport"]):
+                    await browser.close()
                     raise Exception("BOSS直聘登录状态已过期，请重新登录")
 
-                soup = BeautifulSoup(resp.text, "html.parser")
-                cards = soup.select(".job-card-box") or soup.select("[class*='job-card']")
-                print(f"[BOSS] cards={len(cards)}")
+                html = await page.content()
+                soup = BeautifulSoup(html, "html.parser")
+                cards = soup.select(".job-card-wrap, .job-card-box, li[class*='job-card']")
+                logger.info(f"[BOSS] Found {len(cards)} cards")
 
                 for card in cards[:30]:
                     try:
@@ -66,18 +59,16 @@ class BossZhipinScraper(BaseScraper):
                         if not text or len(text) < 10:
                             continue
 
-                        title_el = card.select_one(".job-name, .job-title")
-                        company_el = card.select_one(".boss-name, .company-name")
-                        salary_el = card.select_one(".job-salary, .salary")
-                        area_el = card.select_one(".company-location, .job-area")
-                        date_el = card.select_one(".job-time, [class*='time'], [class*='date'], .publish-time")
+                        title_el = card.select_one(".job-name, [class*='job-name'], .job-title, [class*='job-title']")
+                        company_el = card.select_one(".company-name, [class*='company-name']")
+                        salary_el = card.select_one(".salary, [class*='salary'], .red")
+                        area_el = card.select_one(".job-area, [class*='job-area'], .area")
                         link_el = card.select_one("a[href*='job_detail']")
 
                         title = title_el.get_text().strip() if title_el else ""
                         company = company_el.get_text().strip() if company_el else ""
                         salary = salary_el.get_text().strip() if salary_el else ""
                         area = area_el.get_text().strip() if area_el else ""
-                        posted_date = date_el.get_text().strip() if date_el else ""
                         job_url = ""
                         if link_el:
                             href = link_el.get("href", "")
@@ -94,12 +85,6 @@ class BossZhipinScraper(BaseScraper):
                                         if any(kw in line for kw in ["有限公司", "科技", "集团", "网络", "信息", "软件"]):
                                             company = line
                                             break
-                                    if not company:
-                                        for i, line in enumerate(lines):
-                                            if "·" in line and len(line) > 4:
-                                                if i > 0 and len(lines[i-1]) >= 4:
-                                                    company = lines[i-1]
-                                                    break
 
                         if title and company:
                             title = title.split("\n")[0].strip()
@@ -108,26 +93,27 @@ class BossZhipinScraper(BaseScraper):
 
                             city = self.city
                             if area:
-                                for c in ["北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "南京", "苏州", "西安"]:
+                                for c in CITY_CODE_MAP:
                                     if c in area:
                                         city = c
                                         break
 
-                            desc = self._extract_description(text, title, company, salary, posted_date)
                             jobs.append({
                                 "title": title,
                                 "company": company,
                                 "city": city,
                                 "salary": salary,
-                                "description": desc,
+                                "description": "",
                                 "requirements": "",
                                 "location": area,
-                                "source_url": job_url or str(resp.url),
-                                "posted_date": posted_date,
+                                "source_url": job_url or str(current_url),
+                                "posted_date": "",
                             })
                     except Exception as e:
                         logger.debug(f"BOSS直聘解析单条失败: {e}")
                         continue
+
+                await browser.close()
 
         except Exception as e:
             logger.warning(f"BOSS直聘抓取失败: {e}")

@@ -1,9 +1,13 @@
-import httpx
+import os
+import re
 from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright
 from .base import BaseScraper
 import logging
 
 logger = logging.getLogger(__name__)
+
+STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "browser_states", "zhaopin_state.json")
 
 
 class ZhaopinScraper(BaseScraper):
@@ -16,65 +20,83 @@ class ZhaopinScraper(BaseScraper):
         search_url = f"{self.base_url}/?jl={self.city}&kw={self.keyword}&p=1"
 
         try:
-            headers = self._headers()
-            headers["Referer"] = self.base_url
+            async with async_playwright() as p:
+                browser = await p.firefox.launch(headless=True)
+                context_kwargs = {"viewport": {"width": 1280, "height": 800}}
 
-            async with httpx.AsyncClient(
-                headers=headers,
-                timeout=httpx.Timeout(20.0),
-                follow_redirects=True,
-            ) as client:
-                resp = await client.get(search_url)
-                print(f"[ZHAOPIN] status={resp.status_code} url={resp.url} len={len(resp.text)} preview={resp.text[:300]}")
+                if os.path.exists(STATE_FILE):
+                    context_kwargs["storage_state"] = STATE_FILE
 
-                if resp.status_code != 200:
-                    raise Exception(f"智联招聘返回HTTP {resp.status_code}")
+                context = await browser.new_context(**context_kwargs)
+                page = await context.new_page()
 
-                soup = BeautifulSoup(resp.text, "html.parser")
-                cards = (
-                    soup.select(".positionlist .job-list-box") or
-                    soup.select(".joblist-box__item") or
-                    soup.select("[class*='joblist'] > div")
-                )
-                print(f"[ZHAOPIN] cards={len(cards)}")
+                await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
+                await page.wait_for_timeout(3000)
+
+                html = await page.content()
+                soup = BeautifulSoup(html, "html.parser")
+                cards = soup.select(".joblist-box__item")
+                logger.info(f"[ZHAOPIN] Found {len(cards)} cards")
 
                 for card in cards[:30]:
                     try:
-                        title_el = card.select_one(".job-name, .job-title, [class*='job-name'], a[href*='job']")
-                        company_el = card.select_one(".company-name, .complay-name, [class*='company']")
-                        salary_el = card.select_one(".salary, .job-salary, [class*='salary']")
-                        date_el = card.select_one(".time, [class*='time'], [class*='date'], .publish-time")
-                        link_el = card.select_one("a[href*='jobdetail']")
+                        text = card.get_text(" ", strip=True)
+                        if not text or len(text) < 10:
+                            continue
 
-                        text = card.get_text().strip()
+                        title_el = card.select_one(".jobinfo__name, [class*='job-name'], [class*='job-title']")
+                        company_el = card.select_one(".company-name, [class*='company-name']")
+                        salary_el = card.select_one(".jobinfo__salary, [class*='salary']")
+                        area_el = card.select_one(".jobinfo__other-info-item, [class*='area'], [class*='location']")
+                        link_el = card.select_one("a[href*='jobdetail'], a[href*='jobs.zhaopin.com']")
+
                         title = title_el.get_text().strip() if title_el else ""
                         company = company_el.get_text().strip() if company_el else ""
                         salary = salary_el.get_text().strip() if salary_el else ""
-                        posted_date = date_el.get_text().strip() if date_el else ""
+                        area = area_el.get_text().strip() if area_el else ""
                         job_url = ""
                         if link_el:
                             href = link_el.get("href", "")
                             if href:
                                 job_url = href if href.startswith("http") else f"{self.base_url}{href}"
 
+                        if not title or not company:
+                            tokens = text.split()
+                            if not title and tokens:
+                                title = tokens[0]
+                            if not company:
+                                for t in tokens:
+                                    if any(kw in t for kw in ["有限公司", "科技", "集团", "股份", "网络", "信息"]):
+                                        company = t
+                                        break
+
                         if title and company:
                             company = self._clean_company(company)
                             salary = self._clean_salary(salary)
-                            desc = self._extract_description(text, title, company, salary, posted_date)
+
+                            city = self.city
+                            if area:
+                                for c in ["北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "南京", "苏州", "西安"]:
+                                    if c in area:
+                                        city = c
+                                        break
+
                             jobs.append({
                                 "title": title,
                                 "company": company,
-                                "city": self.city,
+                                "city": city,
                                 "salary": salary,
-                                "description": desc,
+                                "description": "",
                                 "requirements": "",
-                                "location": "",
-                                "source_url": job_url or str(resp.url),
-                                "posted_date": posted_date,
+                                "location": area,
+                                "source_url": job_url or str(page.url),
+                                "posted_date": "",
                             })
                     except Exception as e:
                         logger.debug(f"智联招聘解析单条失败: {e}")
                         continue
+
+                await browser.close()
 
         except Exception as e:
             logger.warning(f"智联招聘抓取失败: {e}")
