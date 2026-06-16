@@ -13,7 +13,7 @@ class BaseScraper:
         self.city = city
         self.keyword = keyword
 
-    async def scrape(self) -> list[dict]:
+    async def scrape(self, browser=None) -> list[dict]:
         raise NotImplementedError
 
     @staticmethod

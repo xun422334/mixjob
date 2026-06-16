@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Optional, List
 from sqlalchemy.orm import Session
+from playwright.async_api import async_playwright
 from ..models.database import JobListing
 from .scrapers import SCRAPER_REGISTRY
 from .scrapers.base import BaseScraper
@@ -18,15 +19,20 @@ async def scrape_jobs(
     if sources is None:
         sources = list(SCRAPER_REGISTRY.keys())
 
-    # 1. Run scrapers sequentially (Playwright uses memory, avoid concurrent browser instances)
     results_list = []
-    for src_key in sources:
-        scraper_cls = SCRAPER_REGISTRY.get(src_key)
-        if scraper_cls is None:
-            continue
-        scraper = scraper_cls(city=city, keyword=keyword)
-        delay = scraper.rate_limit_delay
-        results_list.append(await _run_one(src_key, scraper, delay=delay))
+
+    async with async_playwright() as p:
+        browser = await p.firefox.launch(headless=True)
+
+        for src_key in sources:
+            scraper_cls = SCRAPER_REGISTRY.get(src_key)
+            if scraper_cls is None:
+                continue
+            scraper = scraper_cls(city=city, keyword=keyword)
+            delay = scraper.rate_limit_delay
+            results_list.append(await _run_one(src_key, scraper, browser, delay=delay))
+
+        await browser.close()
 
     # 2. Collect per-source results
     per_source = {}
@@ -95,19 +101,19 @@ async def scrape_jobs(
     }
 
 
-async def _run_one(src_key: str, scraper, delay: float = 0):
+async def _run_one(src_key: str, scraper, browser, delay: float = 0):
     if delay > 0:
         await asyncio.sleep(delay)
     try:
         logger.info(f"[{src_key}] Starting scrape for keyword={scraper.keyword}...")
-        result = await asyncio.wait_for(scraper.scrape(), timeout=60)
+        result = await asyncio.wait_for(scraper.scrape(browser=browser), timeout=90)
         for job in result:
             job["source"] = scraper.source_name
         logger.info(f"[{src_key}] Done: {len(result)} jobs")
         return (src_key, result)
     except asyncio.TimeoutError:
-        logger.warning(f"[{src_key}] Timed out after 60s")
-        return (src_key, Exception(f"抓取超时"))
+        logger.warning(f"[{src_key}] Timed out after 90s")
+        return (src_key, Exception("抓取超时"))
     except Exception as e:
         logger.warning(f"[{src_key}] Failed: {e}")
         return (src_key, e)
