@@ -26,7 +26,7 @@ class GuopinScraper(BaseScraper):
             page = await context.new_page()
 
             await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(2000)
 
             html = await page.content()
             soup = BeautifulSoup(html, "html.parser")

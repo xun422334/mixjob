@@ -106,7 +106,7 @@ async def _run_one(src_key: str, scraper, browser, delay: float = 0):
         await asyncio.sleep(delay)
     try:
         logger.info(f"[{src_key}] Starting scrape for keyword={scraper.keyword}...")
-        result = await asyncio.wait_for(scraper.scrape(browser=browser), timeout=90)
+        result = await asyncio.wait_for(scraper.scrape(browser=browser), timeout=120)
         for job in result:
             job["source"] = scraper.source_name
         logger.info(f"[{src_key}] Done: {len(result)} jobs")
