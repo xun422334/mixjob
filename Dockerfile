@@ -5,6 +5,8 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN playwright install firefox --with-deps
+
 COPY backend/ .
 
 EXPOSE 8000
