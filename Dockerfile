@@ -2,6 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Use Aliyun mirrors for faster apt in China
+RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+    && sed -i 's|http://security.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
+
 # Install Playwright system deps (Firefox) - Debian 13 compatible package names
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libx11-xcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 \
@@ -14,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt
 RUN playwright install firefox
 
 COPY backend/ .
