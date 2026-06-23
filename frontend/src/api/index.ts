@@ -1,4 +1,4 @@
-const BASE = import.meta.env.DEV ? '/api' : 'http://139.224.214.91:8000/api'
+const BASE = import.meta.env.DEV ? '/api' : 'https://api.mixjob.cn/api'
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${BASE}${url}`, {
