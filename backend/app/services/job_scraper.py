@@ -112,7 +112,7 @@ async def _run_one(src_key: str, scraper, browser, delay: float = 0):
         logger.info(f"[{src_key}] Done: {len(result)} jobs")
         return (src_key, result)
     except asyncio.TimeoutError:
-        logger.warning(f"[{src_key}] Timed out after 90s")
+        logger.warning(f"[{src_key}] Timed out after 120s")
         return (src_key, Exception("抓取超时"))
     except Exception as e:
         logger.warning(f"[{src_key}] Failed: {e}")

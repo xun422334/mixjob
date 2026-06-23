@@ -32,7 +32,7 @@ class ZhaopinScraper(BaseScraper):
             context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
 
-            await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
+            await page.goto(search_url, timeout=60000, wait_until="load")
             await page.wait_for_timeout(2000)
 
             html = await page.content()
