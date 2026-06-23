@@ -68,17 +68,22 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
   }
 
   const handleStartLogin = async (source: string) => {
-    setMessage('')
+    setMessage('正在连接服务器...')
     cleanupPoll()
+
+    // Immediately switch to QR view for instant feedback
+    setQrSource(source)
+    setQrImage(null)
+    setQrWaiting(true)
 
     try {
       const data = await startProxyLogin(source)
-      setQrSource(source)
       setQrImage(data.screenshot)
-      setQrWaiting(true)
 
       if (data.session_status === 'starting') {
         setMessage('正在启动浏览器，请稍候...')
+      } else {
+        setMessage('')
       }
 
       // Poll for login status
@@ -111,6 +116,10 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
         }
       }, 3000)
     } catch (e: any) {
+      cleanupPoll()
+      setQrSource(null)
+      setQrImage(null)
+      setQrWaiting(false)
       setMessage(e?.message || '启动登录失败，请重试')
     }
   }
@@ -172,7 +181,10 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
               </div>
             )}
 
-            {qrWaiting && (
+            {message && (
+              <p className="text-sm" style={{ color: '#42A5F5' }}>{message}</p>
+            )}
+            {qrWaiting && !message && (
               <p className="text-sm" style={{ color: '#42A5F5' }}>
                 请使用手机扫码登录...
               </p>

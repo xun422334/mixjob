@@ -151,7 +151,7 @@ export async function getLoginStatusBySource(source: string) {
 }
 
 export async function startProxyLogin(source: string) {
-  return request<{ status: string; source: string; screenshot: string; session_status: string }>(`/auth/login/proxy/${source}`, { method: 'POST' })
+  return request<{ status: string; source: string; screenshot: string; session_status: string }>(`/auth/login/proxy/${source}`, { method: 'POST', timeout: 120000 })
 }
 
 export async function checkProxyLoginStatus(source: string) {
@@ -159,7 +159,7 @@ export async function checkProxyLoginStatus(source: string) {
 }
 
 export async function refreshProxyLogin(source: string) {
-  return request<{ status: string; screenshot: string }>(`/auth/login/proxy/${source}/refresh`, { method: 'POST' })
+  return request<{ status: string; screenshot: string }>(`/auth/login/proxy/${source}/refresh`, { method: 'POST', timeout: 30000 })
 }
 
 export async function cancelProxyLogin(source: string) {
