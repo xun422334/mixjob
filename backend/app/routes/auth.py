@@ -107,9 +107,22 @@ async def upload_login_state(source: str, file: UploadFile = File(...)):
 async def login_status(source: str):
     """Check if user is logged in to a recruitment site"""
     state_file = os.path.join(BROWSER_STATE_DIR, f"{source}_state.json")
+    meta_file = os.path.join(BROWSER_STATE_DIR, f"{source}_meta.json")
 
     if not os.path.exists(state_file):
         return {"source": source, "logged_in": False, "message": "未登录"}
+
+    # Check meta file for login_detected flag
+    if os.path.exists(meta_file):
+        import json
+        try:
+            with open(meta_file) as f:
+                meta = json.load(f)
+            if not meta.get("login_detected", False):
+                # File was saved but login was not detected (timeout or abort)
+                return {"source": source, "logged_in": False, "message": "登录未完成（二维码未被扫描或登录超时）"}
+        except Exception:
+            pass
 
     import time
     import_time = os.path.getmtime(state_file)

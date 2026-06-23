@@ -1,12 +1,19 @@
 const BASE = import.meta.env.DEV ? '/api' : 'https://api.mixjob.cn/api'
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const resp = await fetch(`${BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
-  if (!resp.ok) throw new Error(`API error: ${resp.status}`)
-  return resp.json()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15000)
+  try {
+    const resp = await fetch(`${BASE}${url}`, {
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      ...options,
+    })
+    if (!resp.ok) throw new Error(`API error: ${resp.status}`)
+    return resp.json()
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 export async function uploadResume(file: File) {

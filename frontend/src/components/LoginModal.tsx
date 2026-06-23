@@ -38,8 +38,12 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
     try {
       const data = await getLoginStatus()
       setStatuses(data.sources || {})
-    } catch {
-      setMessage('获取登录状态失败')
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        setMessage('请求超时，请检查网络后重试')
+      } else {
+        setMessage('获取登录状态失败')
+      }
     } finally {
       setLoading(false)
     }
