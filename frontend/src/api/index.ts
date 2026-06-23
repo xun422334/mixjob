@@ -1,18 +1,19 @@
 const BASE = import.meta.env.DEV ? '/api' : 'https://api.mixjob.cn/api'
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
+async function request<T>(url: string, options?: RequestInit & { timeout?: number }): Promise<T> {
+  const { timeout: timeoutMs, ...fetchOptions } = options || {}
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 15000)
+  const timer = setTimeout(() => controller.abort(), timeoutMs ?? 15000)
   try {
     const resp = await fetch(`${BASE}${url}`, {
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
-      ...options,
+      ...fetchOptions,
     })
     if (!resp.ok) throw new Error(`API error: ${resp.status}`)
     return resp.json()
   } finally {
-    clearTimeout(timeout)
+    clearTimeout(timer)
   }
 }
 
@@ -39,6 +40,7 @@ export async function sendMessage(message: string, resumeId: number | null) {
   return request<{ response: string; detected_cities: string[]; detected_position: string }>('/chat', {
     method: 'POST',
     body: JSON.stringify({ message, resume_id: resumeId }),
+    timeout: 120000,
   })
 }
 
@@ -108,6 +110,7 @@ export async function scrapeJobs(city: string, keyword: string, sources?: string
   return request<ScrapeResult>('/jobs/scrape', {
     method: 'POST',
     body: JSON.stringify({ city, keyword, sources }),
+    timeout: 300000,
   })
 }
 

@@ -77,7 +77,11 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
       setQrImage(data.screenshot)
       setQrWaiting(true)
 
-      // Poll for login detection
+      if (data.session_status === 'starting') {
+        setMessage('正在启动浏览器，请稍候...')
+      }
+
+      // Poll for login status
       pollRef.current = setInterval(async () => {
         try {
           const status = await checkProxyLoginStatus(source)
@@ -87,7 +91,6 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
             setQrImage(null)
             setMessage(`${LOGIN_URLS[source]?.label || source} 登录成功！`)
             fetchStatus()
-            // Auto close QR view after success
             setTimeout(() => setQrSource(null), 1500)
           } else if (!status.active) {
             cleanupPoll()
@@ -96,9 +99,12 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
             setMessage(status.message || '登录超时，请重试')
             setQrSource(null)
           }
-          // Still waiting - update screenshot if available
+          // Update screenshot when browser is ready
           if (status.screenshot) {
             setQrImage(status.screenshot)
+            setMessage('')
+          } else if (status.message && status.message !== '等待扫码...') {
+            setMessage(status.message)
           }
         } catch {
           // keep polling
