@@ -13,6 +13,7 @@ STATE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
     "browser_states"
 )
+SESSION_DIR = os.path.join(STATE_DIR, "sessions")
 
 SITES = {
     "boss": {
@@ -41,6 +42,50 @@ LOGIN_TIMEOUT = 300
 _active_sessions: dict[str, dict] = {}
 
 
+def _session_file(source: str) -> str:
+    return os.path.join(SESSION_DIR, f"{source}_active.json")
+
+
+def _read_session(source: str) -> dict | None:
+    path = _session_file(source)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _write_session(source: str, data: dict):
+    os.makedirs(SESSION_DIR, exist_ok=True)
+    with open(_session_file(source), "w") as f:
+        json.dump(data, f)
+
+
+def _clear_session(source: str):
+    try:
+        os.remove(_session_file(source))
+    except Exception:
+        pass
+
+
+def _screenshot_file(source: str) -> str:
+    return os.path.join(SESSION_DIR, f"{source}_qr.png")
+
+
+def _save_screenshot(source: str, img_bytes: bytes):
+    os.makedirs(SESSION_DIR, exist_ok=True)
+    with open(_screenshot_file(source), "wb") as f:
+        f.write(img_bytes)
+
+
+def _read_screenshot(source: str) -> str | None:
+    try:
+        with open(_screenshot_file(source), "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return None
+
+
 async def _detect_login(source: str, page, context, browser, playwright_obj):
     """Background task: poll for login success, save state when detected."""
     site = SITES[source]
@@ -49,6 +94,10 @@ async def _detect_login(source: str, page, context, browser, playwright_obj):
         while time.time() - start < LOGIN_TIMEOUT:
             await asyncio.sleep(2)
             try:
+                # Save fresh screenshot every loop for status polling
+                img = await page.screenshot(type="png")
+                _save_screenshot(source, img)
+
                 url = page.url
                 for indicator in site["success_indicators"]:
                     if indicator in url:
@@ -61,11 +110,13 @@ async def _detect_login(source: str, page, context, browser, playwright_obj):
                         return
             except Exception:
                 continue
-        # Timeout
         await _save_and_cleanup(source, page, context, browser, playwright_obj, False)
     except Exception as e:
         logger.warning(f"Login detection error for {source}: {e}")
-        _active_sessions.pop(source, None)
+        try:
+            await _cleanup_browser(source, page, context, browser, playwright_obj, False)
+        except Exception:
+            pass
 
 
 async def _save_and_cleanup(source, page, context, browser, playwright_obj, success: bool):
@@ -87,26 +138,57 @@ async def _save_and_cleanup(source, page, context, browser, playwright_obj, succ
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
     logger.info(f"[LoginProxy] {source}: login={'OK' if success else 'timeout'}, state saved")
-    await context.close()
-    await browser.close()
-    await playwright_obj.__aexit__(None, None, None)
-    session = _active_sessions.get(source)
-    if session:
-        session["logged_in"] = success
-        session["page"] = None
+    await _cleanup_browser(source, page, context, browser, playwright_obj, success)
+
+
+async def _cleanup_browser(source, page, context, browser, playwright_obj, success: bool):
+    """Close browser and update session state."""
+    try:
+        if page:
+            session = _active_sessions.get(source)
+            if session:
+                session["page"] = None
+    except Exception:
+        pass
+    try:
+        await context.close()
+    except Exception:
+        pass
+    try:
+        await browser.close()
+    except Exception:
+        pass
+    try:
+        await playwright_obj.__aexit__(None, None, None)
+    except Exception:
+        pass
+
+    # Update file-based session state
+    session_data = _read_session(source) or {}
+    session_data["logged_in"] = success
+    session_data["active"] = False
+    _write_session(source, session_data)
+
+    # Clean up in-memory session
+    _active_sessions.pop(source, None)
 
 
 async def start_login(source: str) -> dict:
     if source not in SITES:
         raise ValueError(f"不支持的来源: {source}")
 
-    # Clean up existing session
+    # Check if there's already an active session
     existing = _active_sessions.pop(source, None)
     if existing:
         try:
             await existing["page"].context.browser.close()
         except Exception:
             pass
+
+    # Check file-based session
+    existing_file = _read_session(source)
+    if existing_file and existing_file.get("active"):
+        _clear_session(source)
 
     p = await async_playwright().__aenter__()
     browser = await p.firefox.launch(headless=True)
@@ -118,6 +200,15 @@ async def start_login(source: str) -> dict:
 
     screenshot = await page.screenshot(type="png")
     img_b64 = base64.b64encode(screenshot).decode()
+    _save_screenshot(source, screenshot)
+
+    # Write file-based session state (for multi-worker access)
+    _write_session(source, {
+        "source": source,
+        "active": True,
+        "logged_in": False,
+        "started_at": time.time(),
+    })
 
     task = asyncio.create_task(_detect_login(source, page, context, browser, p))
 
@@ -135,40 +226,66 @@ async def start_login(source: str) -> dict:
 
 
 async def get_login_status(source: str) -> dict:
+    # Check in-memory session first (same worker)
     session = _active_sessions.get(source)
-    if not session:
+    if session:
+        if session["logged_in"]:
+            _active_sessions.pop(source, None)
+            _clear_session(source)
+            return {"logged_in": True, "active": False, "message": "登录成功"}
+
+        elapsed = time.time() - session["started_at"]
+        if elapsed > LOGIN_TIMEOUT:
+            _active_sessions.pop(source, None)
+            _clear_session(source)
+            return {"logged_in": False, "active": False, "message": "登录超时，请重试"}
+
+        page = session.get("page")
+        screenshot = None
+        if page:
+            try:
+                img = await page.screenshot(type="png")
+                screenshot = base64.b64encode(img).decode()
+                _save_screenshot(source, img)
+            except Exception:
+                screenshot = _read_screenshot(source)
+        return {"logged_in": False, "active": True, "screenshot": screenshot, "message": "等待扫码..."}
+
+    # Check file-based session (different worker)
+    file_session = _read_session(source)
+    if not file_session:
         return {"logged_in": False, "active": False, "message": "没有活跃的登录会话"}
 
-    if session["logged_in"]:
-        _active_sessions.pop(source, None)
+    if file_session.get("logged_in"):
+        _clear_session(source)
         return {"logged_in": True, "active": False, "message": "登录成功"}
 
-    elapsed = time.time() - session["started_at"]
+    elapsed = time.time() - file_session.get("started_at", 0)
     if elapsed > LOGIN_TIMEOUT:
-        _active_sessions.pop(source, None)
+        _clear_session(source)
         return {"logged_in": False, "active": False, "message": "登录超时，请重试"}
 
-    page = session.get("page")
-    screenshot = None
-    if page:
-        try:
-            img = await page.screenshot(type="png")
-            screenshot = base64.b64encode(img).decode()
-        except Exception:
-            pass
-
+    screenshot = _read_screenshot(source)
     return {"logged_in": False, "active": True, "screenshot": screenshot, "message": "等待扫码..."}
 
 
 async def refresh_screenshot(source: str) -> dict:
     session = _active_sessions.get(source)
     if not session or not session.get("page"):
-        raise ValueError("没有活跃的登录会话")
+        # Session may be on another worker - the detection loop updates screenshots automatically
+        file_session = _read_session(source)
+        if not file_session or not file_session.get("active"):
+            raise ValueError("没有活跃的登录会话")
+        screenshot = _read_screenshot(source)
+        if not screenshot:
+            raise ValueError("无法获取登录截图")
+        return {"screenshot": screenshot}
 
     await session["page"].reload(wait_until="domcontentloaded")
     await session["page"].wait_for_timeout(2000)
 
     img = await session["page"].screenshot(type="png")
+    _save_screenshot(source, img)
     return {"screenshot": base64.b64encode(img).decode()}
 
 
@@ -183,3 +300,4 @@ async def cancel_login(source: str):
             await session["browser"].close()
         except Exception:
             pass
+    _clear_session(source)

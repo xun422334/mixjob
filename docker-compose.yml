@@ -9,3 +9,5 @@ services:
       - ./browser_states:/app/browser_states
     environment:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    mem_limit: 1400m
+    memswap_limit: 2000m

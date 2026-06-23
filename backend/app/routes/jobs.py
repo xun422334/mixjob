@@ -85,24 +85,34 @@ async def list_jobs(
 @router.post("/scrape")
 async def scrape_jobs_api(req: ScrapeRequest, db: Session = Depends(get_db)):
     import traceback
-    from ..services.job_scraper import scrape_jobs as run_scrape
+    from ..services.job_scraper import scrape_jobs as run_scrape, acquire_scrape_lock, release_scrape_lock
 
-    keywords = [k.strip() for k in req.keyword.split('/') if k.strip()]
-    if not keywords:
-        keywords = [req.keyword]
+    if not acquire_scrape_lock():
+        return {
+            "error": "已有抓取任务正在进行中，请等待完成后重试",
+            "total_found": 0, "after_dedup": 0, "new_added": 0,
+            "duplicates_skipped": 0, "per_source": {},
+        }
 
-    all_results = []
-    for kw in keywords:
-        try:
-            result = await run_scrape(
-                city=req.city,
-                keyword=kw,
-                sources=req.sources,
-                db=db,
-            )
-        except Exception as e:
-            return {"error": str(e), "traceback": traceback.format_exc()}
-        all_results.append(result)
+    try:
+        keywords = [k.strip() for k in req.keyword.split('/') if k.strip()]
+        if not keywords:
+            keywords = [req.keyword]
+
+        all_results = []
+        for kw in keywords:
+            try:
+                result = await run_scrape(
+                    city=req.city,
+                    keyword=kw,
+                    sources=req.sources,
+                    db=db,
+                )
+            except Exception as e:
+                return {"error": str(e), "traceback": traceback.format_exc()}
+            all_results.append(result)
+    finally:
+        release_scrape_lock()
 
     # Merge results from multiple keywords
     merged_new = sum(r["new_added"] for r in all_results)

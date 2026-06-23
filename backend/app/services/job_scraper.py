@@ -1,5 +1,8 @@
 import asyncio
+import fcntl
 import logging
+import os
+import tempfile
 from typing import Optional, List
 from sqlalchemy.orm import Session
 from playwright.async_api import async_playwright
@@ -8,6 +11,35 @@ from .scrapers import SCRAPER_REGISTRY
 from .scrapers.base import BaseScraper
 
 logger = logging.getLogger(__name__)
+
+SCRAPE_LOCK_FILE = os.path.join(tempfile.gettempdir(), "mixjob_scrape.lock")
+_scrape_lock_fd: Optional[int] = None
+
+
+def acquire_scrape_lock() -> bool:
+    """Try to acquire the scrape mutex. Returns True if acquired."""
+    global _scrape_lock_fd
+    try:
+        fd = os.open(SCRAPE_LOCK_FILE, os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _scrape_lock_fd = fd
+        return True
+    except (BlockingIOError, OSError):
+        if fd:
+            os.close(fd)
+        return False
+
+
+def release_scrape_lock():
+    """Release the scrape mutex."""
+    global _scrape_lock_fd
+    if _scrape_lock_fd is not None:
+        try:
+            fcntl.flock(_scrape_lock_fd, fcntl.LOCK_UN)
+            os.close(_scrape_lock_fd)
+        except Exception:
+            pass
+        _scrape_lock_fd = None
 
 
 async def scrape_jobs(
