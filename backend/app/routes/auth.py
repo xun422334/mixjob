@@ -2,6 +2,9 @@ import os
 import shutil
 import subprocess
 from fastapi import APIRouter, HTTPException, UploadFile, File
+from ..services.login_proxy import (
+    start_login, get_login_status, refresh_screenshot, cancel_login, SITES as PROXY_SITES
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -126,3 +129,53 @@ async def all_login_status():
         status = await login_status(source)
         results[source] = status
     return {"sources": results}
+
+
+# === Proxy login (server-side Playwright + screenshot for QR scan) ===
+
+@router.post("/login/proxy/{source}")
+async def proxy_login_start(source: str):
+    """Start server-side Playwright browser, return QR code screenshot for scanning."""
+    try:
+        result = await start_login(source)
+        return {
+            "status": "ok",
+            "source": source,
+            "screenshot": f"data:image/png;base64,{result['screenshot']}",
+            "session_status": result["status"],
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"启动登录失败: {str(e)}")
+
+
+@router.get("/login/proxy/{source}/status")
+async def proxy_login_check(source: str):
+    """Check proxy login status, return fresh screenshot if still waiting."""
+    try:
+        result = await get_login_status(source)
+        if result.get("screenshot"):
+            result["screenshot"] = f"data:image/png;base64,{result['screenshot']}"
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/login/proxy/{source}/refresh")
+async def proxy_login_refresh(source: str):
+    """Refresh the QR code on the login page."""
+    try:
+        result = await refresh_screenshot(source)
+        return {"status": "ok", "screenshot": f"data:image/png;base64,{result['screenshot']}"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/login/proxy/{source}/cancel")
+async def proxy_login_cancel(source: str):
+    """Cancel an active proxy login session."""
+    await cancel_login(source)
+    return {"status": "ok", "message": "登录会话已取消"}
