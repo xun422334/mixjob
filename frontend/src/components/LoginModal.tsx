@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { getLoginStatus, startProxyLogin, checkProxyLoginStatus, refreshProxyLogin, cancelProxyLogin } from '../api'
+import { getLoginStatus, startProxyLogin, checkProxyLoginStatus, refreshProxyLogin, cancelProxyLogin, getLoginScreenshotUrl } from '../api'
 
 interface LoginStatus {
   source: string
@@ -78,13 +78,14 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
 
     try {
       const data = await startProxyLogin(source)
-      setQrImage(data.screenshot)
 
       if (data.session_status === 'starting') {
         setMessage('正在启动浏览器，请稍候...')
       } else {
         setMessage('')
       }
+
+      let screenshotLoaded = false
 
       // Poll for login status
       pollRef.current = setInterval(async () => {
@@ -104,11 +105,12 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
             setMessage(status.message || '登录超时，请重试')
             setQrSource(null)
           }
-          // Update screenshot when browser is ready
-          if (status.screenshot) {
-            setQrImage(status.screenshot)
+          // Show screenshot when ready (load as URL, not base64)
+          if (status.has_screenshot && !screenshotLoaded) {
+            screenshotLoaded = true
+            setQrImage(getLoginScreenshotUrl(source) + '?t=' + Date.now())
             setMessage('')
-          } else if (status.message && status.message !== '等待扫码...') {
+          } else if (!status.has_screenshot && status.message && status.message !== '等待扫码...') {
             setMessage(status.message)
           }
         } catch {
@@ -127,8 +129,8 @@ export default function LoginModal({ show, onClose }: LoginModalProps) {
   const handleRefresh = async () => {
     if (!qrSource) return
     try {
-      const data = await refreshProxyLogin(qrSource)
-      setQrImage(data.screenshot)
+      await refreshProxyLogin(qrSource)
+      setQrImage(getLoginScreenshotUrl(qrSource) + '?t=' + Date.now())
       setMessage('二维码已刷新')
     } catch {
       setMessage('刷新失败')

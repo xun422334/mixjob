@@ -150,16 +150,22 @@ export async function getLoginStatusBySource(source: string) {
   return request<{ source: string; logged_in: boolean; message: string; hours_ago?: number }>(`/auth/login/status/${source}`)
 }
 
+const BASE_URL = 'https://api.mixjob.cn/api'
+
+export function getLoginScreenshotUrl(source: string) {
+  return `${BASE_URL}/auth/login/proxy/${source}/screenshot`
+}
+
 export async function startProxyLogin(source: string) {
-  return request<{ status: string; source: string; screenshot: string; session_status: string }>(`/auth/login/proxy/${source}`, { method: 'POST', timeout: 120000 })
+  return request<{ status: string; source: string; session_status: string }>(`/auth/login/proxy/${source}`, { method: 'POST', timeout: 120000 })
 }
 
 export async function checkProxyLoginStatus(source: string) {
-  return request<{ logged_in: boolean; active: boolean; screenshot?: string; message: string }>(`/auth/login/proxy/${source}/status`)
+  return request<{ logged_in: boolean; active: boolean; has_screenshot?: boolean; message: string }>(`/auth/login/proxy/${source}/status`)
 }
 
 export async function refreshProxyLogin(source: string) {
-  return request<{ status: string; screenshot: string }>(`/auth/login/proxy/${source}/refresh`, { method: 'POST', timeout: 30000 })
+  return request<{ status: string }>(`/auth/login/proxy/${source}/refresh`, { method: 'POST', timeout: 30000 })
 }
 
 export async function cancelProxyLogin(source: string) {
